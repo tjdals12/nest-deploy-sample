@@ -1,0 +1,59 @@
+name: deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: ['20.x']
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Generate environment file
+        run: |
+          echo "DB_HOST=$DB_HOST" >> src/config/.env
+          echo "DB_PORT=$DB_PORT" >> src/config/.env
+          echo "DB_NAME=$DB_NAME" >> src/config/.env
+          echo "DB_USER=$DB_USER" >> src/config/.env
+          echo "DB_PASS=$DB_PASS" >> src/config/.env
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASS: ${{ secrets.DB_PASS }}
+
+      - name: Install dependencies
+        run: yarn install --immutable --check-cache
+
+      - name: build
+        run: yarn build
+
+      - name: Zip
+        run: zip -r ${{ github.sha }}.zip dist ecosystem.config.js scripts appspec.yml package.json yarn.lock .nvmrc
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
+
+      - name: Upload to S3
+        run: aws s3 cp ${{ github.sha }}.zip s3://${{ secrets.AWS_BUCKET }}/${{ github.ref_name }}/${{ github.sha }}.zip --region ap-northeast-2
+
+      - name: Code deploy
+        run: aws deploy create-deployment --region=ap-northeast-2 --application-name nest-deploy-test --deployment-group-name main --s3-location bucket=${{ secrets.AWS_BUCKET }},bundleType=zip,key=${{ github.ref_name }}/${{ github.sha }}.zip
